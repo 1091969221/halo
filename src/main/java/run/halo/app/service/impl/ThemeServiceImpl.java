@@ -6,8 +6,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import lombok.extern.slf4j.Slf4j;
@@ -27,11 +29,13 @@ import run.halo.app.exception.BadRequestException;
 import run.halo.app.exception.ForbiddenException;
 import run.halo.app.exception.NotFoundException;
 import run.halo.app.exception.ServiceException;
+import run.halo.app.exception.ThemeNotFoundException;
 import run.halo.app.exception.ThemeNotSupportException;
 import run.halo.app.exception.ThemePropertyMissingException;
 import run.halo.app.exception.ThemeUpdateException;
 import run.halo.app.handler.theme.config.ThemeConfigResolver;
 import run.halo.app.handler.theme.config.support.Group;
+import run.halo.app.handler.theme.config.support.Item;
 import run.halo.app.handler.theme.config.support.ThemeProperty;
 import run.halo.app.model.support.HaloConst;
 import run.halo.app.model.support.ThemeFile;
@@ -52,6 +56,7 @@ import run.halo.app.utils.FileUtils;
  * Theme service implementation.
  *
  * @author ryanwang
+ * @author guqing
  * @date 2019-03-26
  */
 @Slf4j
@@ -131,7 +136,7 @@ public class ThemeServiceImpl implements ThemeService {
             Path themePath = Paths.get(themeProperty.getThemePath());
             try (Stream<Path> pathStream = Files.list(themePath)) {
                 return pathStream.filter(path ->
-                    StringUtils.startsWithIgnoreCase(path.getFileName().toString(), prefix))
+                        StringUtils.startsWithIgnoreCase(path.getFileName().toString(), prefix))
                     .map(path -> {
                         // Remove prefix
                         final var customTemplate = StringUtils
@@ -295,6 +300,16 @@ public class ThemeServiceImpl implements ThemeService {
     }
 
     @Override
+    public Set<Item> fetchConfigItemsBy(@NonNull String themeId, @NonNull String group) {
+        return fetchConfig(themeId).stream()
+            .filter(g -> StringUtils.equals(g.getName(), group))
+            .findFirst()
+            .map(Group::getItems)
+            .map(items -> (Set<Item>) new LinkedHashSet<>(items))
+            .orElseGet(Collections::emptySet);
+    }
+
+    @Override
     public String render(String pageName) {
         var folderName = getActivatedTheme().getFolderName();
         return "themes/" + folderName + "/" + pageName;
@@ -315,13 +330,17 @@ public class ThemeServiceImpl implements ThemeService {
     @Override
     @NonNull
     public ThemeProperty getActivatedTheme() {
-        return fetchActivatedTheme().orElseThrow();
+        return themeRepository.getActivatedThemeProperty();
     }
 
     @Override
     @NonNull
     public Optional<ThemeProperty> fetchActivatedTheme() {
-        return Optional.of(themeRepository.getActivatedThemeProperty());
+        try {
+            return Optional.of(themeRepository.getActivatedThemeProperty());
+        } catch (ThemeNotFoundException tne) {
+            return Optional.empty();
+        }
     }
 
     @Override

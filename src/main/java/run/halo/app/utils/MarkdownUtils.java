@@ -71,7 +71,8 @@ public class MarkdownUtils {
     private static final Parser PARSER = Parser.builder(OPTIONS).build();
 
     private static final HtmlRenderer RENDERER = HtmlRenderer.builder(OPTIONS).build();
-    private static final Pattern FRONT_MATTER = Pattern.compile("^---[\\s\\S]*?---");
+    private static final Pattern FRONT_MATTER = Pattern.compile("^(---)?[\\s\\S]*?---");
+    private static final Pattern TABLE = Pattern.compile("\\|\\s*:?---");
 
     //    /**
     //     * Render html document to markdown document.
@@ -136,6 +137,9 @@ public class MarkdownUtils {
                 return row;
             }
         }).collect(Collectors.joining("\n"));
+        if (!markdown.startsWith("---\n")) {
+            markdown = "---\n" + markdown;
+        }
         AbstractYamlFrontMatterVisitor visitor = new AbstractYamlFrontMatterVisitor();
         Node document = PARSER.parse(markdown);
         visitor.visit(document);
@@ -151,7 +155,8 @@ public class MarkdownUtils {
     public static String removeFrontMatter(String markdown) {
         markdown = markdown.trim();
         Matcher matcher = FRONT_MATTER.matcher(markdown);
-        if (matcher.find()) {
+        // if has '| ---' or '| :---' return
+        if (matcher.find() && !TABLE.matcher(matcher.group()).find()) {
             return markdown.replace(matcher.group(), "");
         }
         return markdown;

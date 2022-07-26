@@ -6,16 +6,13 @@ import static run.halo.app.model.support.HaloConst.HALO_DATA_EXPORT_PREFIX;
 import static run.halo.app.utils.DateTimeUtils.HORIZONTAL_LINE_DATETIME_FORMATTER;
 import static run.halo.app.utils.FileUtils.checkDirectoryTraversal;
 
-import cn.hutool.core.date.DateUtil;
-import cn.hutool.core.io.IoUtil;
-import cn.hutool.core.io.file.FileWriter;
-import cn.hutool.core.util.CharsetUtil;
-import cn.hutool.core.util.IdUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.pool.HikariPool;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.MalformedURLException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -27,22 +24,29 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipOutputStream;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.SystemUtils;
+import org.apache.logging.log4j.core.util.ReflectionUtil;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.multipart.MultipartFile;
 import run.halo.app.config.properties.HaloProperties;
 import run.halo.app.event.options.OptionUpdatedEvent;
 import run.halo.app.event.theme.ThemeUpdatedEvent;
+import run.halo.app.exception.BadRequestException;
 import run.halo.app.exception.NotFoundException;
 import run.halo.app.exception.ServiceException;
 import run.halo.app.handler.file.FileHandler;
@@ -51,6 +55,8 @@ import run.halo.app.model.dto.post.BasePostDetailDTO;
 import run.halo.app.model.entity.Attachment;
 import run.halo.app.model.entity.Category;
 import run.halo.app.model.entity.CommentBlackList;
+import run.halo.app.model.entity.Content;
+import run.halo.app.model.entity.ContentPatchLog;
 import run.halo.app.model.entity.Journal;
 import run.halo.app.model.entity.JournalComment;
 import run.halo.app.model.entity.Link;
@@ -77,6 +83,8 @@ import run.halo.app.service.AttachmentService;
 import run.halo.app.service.BackupService;
 import run.halo.app.service.CategoryService;
 import run.halo.app.service.CommentBlackListService;
+import run.halo.app.service.ContentPatchLogService;
+import run.halo.app.service.ContentService;
 import run.halo.app.service.JournalCommentService;
 import run.halo.app.service.JournalService;
 import run.halo.app.service.LinkService;
@@ -96,8 +104,12 @@ import run.halo.app.service.TagService;
 import run.halo.app.service.ThemeSettingService;
 import run.halo.app.service.UserService;
 import run.halo.app.utils.DateTimeUtils;
+import run.halo.app.utils.DateUtils;
+import run.halo.app.utils.FileUtils;
+import run.halo.app.utils.FilenameUtils;
 import run.halo.app.utils.HaloUtils;
 import run.halo.app.utils.JsonUtils;
+import run.halo.app.utils.VersionUtil;
 
 /**
  * Backup service implementation.
@@ -105,7 +117,8 @@ import run.halo.app.utils.JsonUtils;
  * @author johnniang
  * @author ryanwang
  * @author Raremaa
- * @date 2019-04-26
+ * @author guqing
+ * @date  2019-04-26
  */
 @Service
 @Slf4j
@@ -142,6 +155,10 @@ public class BackupServiceImpl implements BackupService {
 
     private final PostService postService;
 
+    private final ContentService contentService;
+
+    private final ContentPatchLogService contentPatchLogService;
+
     private final PostCategoryService postCategoryService;
 
     private final PostCommentService postCommentService;
@@ -168,17 +185,21 @@ public class BackupServiceImpl implements BackupService {
 
     private final ApplicationEventPublisher eventPublisher;
 
+    private final ApplicationContext appContext;
+
     public BackupServiceImpl(AttachmentService attachmentService, CategoryService categoryService,
         CommentBlackListService commentBlackListService, JournalService journalService,
         JournalCommentService journalCommentService, LinkService linkService, LogService logService,
         MenuService menuService, OptionService optionService, PhotoService photoService,
-        PostService postService, PostCategoryService postCategoryService,
+        PostService postService, ContentService contentService,
+        ContentPatchLogService contentPatchLogService,
+        PostCategoryService postCategoryService,
         PostCommentService postCommentService, PostMetaService postMetaService,
         PostTagService postTagService, SheetService sheetService,
         SheetCommentService sheetCommentService, SheetMetaService sheetMetaService,
         TagService tagService, ThemeSettingService themeSettingService, UserService userService,
         OneTimeTokenService oneTimeTokenService, HaloProperties haloProperties,
-        ApplicationEventPublisher eventPublisher) {
+        ApplicationEventPublisher eventPublisher, ApplicationContext appContext) {
         this.attachmentService = attachmentService;
         this.categoryService = categoryService;
         this.commentBlackListService = commentBlackListService;
@@ -190,6 +211,8 @@ public class BackupServiceImpl implements BackupService {
         this.optionService = optionService;
         this.photoService = photoService;
         this.postService = postService;
+        this.contentService = contentService;
+        this.contentPatchLogService = contentPatchLogService;
         this.postCategoryService = postCategoryService;
         this.postCommentService = postCommentService;
         this.postMetaService = postMetaService;
@@ -203,26 +226,34 @@ public class BackupServiceImpl implements BackupService {
         this.oneTimeTokenService = oneTimeTokenService;
         this.haloProperties = haloProperties;
         this.eventPublisher = eventPublisher;
+        this.appContext = appContext;
     }
 
     @Override
     public BasePostDetailDTO importMarkdown(MultipartFile file) throws IOException {
+        try {
+            // Read markdown content.
+            String markdown = FileUtils.readString(file.getInputStream());
+            // TODO sheet import
+            return postService.importMarkdown(markdown, file.getOriginalFilename());
+        } catch (OutOfMemoryError error) {
+            throw new ServiceException(
+                "文件内容过大，无法导入。", error);
+        }
 
-        // Read markdown content.
-        String markdown = IoUtil.read(file.getInputStream(), StandardCharsets.UTF_8);
-
-        // TODO sheet import
-        return postService.importMarkdown(markdown, file.getOriginalFilename());
     }
 
     @Override
-    public BackupDTO backupWorkDirectory() {
+    public BackupDTO backupWorkDirectory(List<String> options) {
+        if (CollectionUtils.isEmpty(options)) {
+            throw new BadRequestException("The options parameter is missing, at least one.");
+        }
         // Zip work directory to temporary file
         try {
             // Create zip path for halo zip
             String haloZipFileName = HALO_BACKUP_PREFIX
                 + DateTimeUtils.format(LocalDateTime.now(), HORIZONTAL_LINE_DATETIME_FORMATTER)
-                + IdUtil.simpleUUID().hashCode() + ".zip";
+                + HaloUtils.simpleUUID().hashCode() + ".zip";
             // Create halo zip file
             Path haloZipFilePath = Paths.get(haloProperties.getBackupDir(), haloZipFileName);
             if (!Files.exists(haloZipFilePath.getParent())) {
@@ -230,10 +261,50 @@ public class BackupServiceImpl implements BackupService {
             }
             Path haloZipPath = Files.createFile(haloZipFilePath);
 
+            boolean dbClosed = false;
+            if (options.contains("db") && SystemUtils.IS_OS_WINDOWS) {
+                try {
+                    HikariDataSource dataSource = appContext.getBean(HikariDataSource.class);
+                    if (dataSource.getDriverClassName().equals("org.h2.Driver")) {
+                        try {
+                            Field poolField = HikariDataSource.class.getDeclaredField(
+                                "pool");
+                            HikariPool pool =
+                                (HikariPool) ReflectionUtil.getFieldValue(poolField, dataSource);
+                            pool.shutdown();
+                            dbClosed = true;
+                        } catch (InterruptedException | NoSuchFieldException e) {
+                            throw new ServiceException("Failed to close H2 database", e);
+                        }
+                    }
+                } catch (NoSuchBeanDefinitionException e) {
+                    throw new ServiceException("Bean HikariDataSource doesn't exists");
+                }
+            }
             // Zip halo
             run.halo.app.utils.FileUtils
-                .zip(Paths.get(this.haloProperties.getWorkDir()), haloZipPath);
+                .zip(Paths.get(this.haloProperties.getWorkDir()), haloZipPath,
+                    path -> {
+                        for (String itemToBackup : options) {
+                            Path backupItemPath =
+                                Paths.get(this.haloProperties.getWorkDir()).resolve(itemToBackup);
+                            if (path.startsWith(backupItemPath)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    });
 
+            if (dbClosed) {
+                try {
+                    Field poolField = HikariDataSource.class.getDeclaredField(
+                        "pool");
+                    HikariDataSource dataSource = appContext.getBean(HikariDataSource.class);
+                    ReflectionUtil.setFieldValue(poolField, dataSource, new HikariPool(dataSource));
+                } catch (NoSuchFieldException e) {
+                    throw new ServiceException("Failed to reopen H2 database", e);
+                }
+            }
             // Build backup dto
             return buildBackupDto(BACKUP_RESOURCE_BASE_URI, haloZipPath);
         } catch (IOException e) {
@@ -334,9 +405,9 @@ public class BackupServiceImpl implements BackupService {
     public BackupDTO exportData() {
         Map<String, Object> data = new HashMap<>();
         data.put("version", HaloConst.HALO_VERSION);
-        data.put("export_date", DateUtil.now());
+        data.put("export_date", DateUtils.now());
         data.put("attachments", attachmentService.listAll());
-        data.put("categories", categoryService.listAll(true));
+        data.put("categories", categoryService.listAll());
         data.put("comment_black_list", commentBlackListService.listAll());
         data.put("journals", journalService.listAll());
         data.put("journal_comments", journalCommentService.listAll());
@@ -346,6 +417,8 @@ public class BackupServiceImpl implements BackupService {
         data.put("options", optionService.listAll());
         data.put("photos", photoService.listAll());
         data.put("posts", postService.listAll());
+        data.put("contents", contentService.listAll());
+        data.put("content_patch_logs", contentPatchLogService.listAll());
         data.put("post_categories", postCategoryService.listAll());
         data.put("post_comments", postCommentService.listAll());
         data.put("post_metas", postMetaService.listAll());
@@ -360,7 +433,7 @@ public class BackupServiceImpl implements BackupService {
         try {
             String haloDataFileName = HALO_DATA_EXPORT_PREFIX
                 + DateTimeUtils.format(LocalDateTime.now(), HORIZONTAL_LINE_DATETIME_FORMATTER)
-                + IdUtil.simpleUUID().hashCode() + ".json";
+                + HaloUtils.simpleUUID().hashCode() + ".json";
 
             Path haloDataFilePath = Paths.get(haloProperties.getDataExportDir(), haloDataFileName);
             if (!Files.exists(haloDataFilePath.getParent())) {
@@ -368,9 +441,7 @@ public class BackupServiceImpl implements BackupService {
             }
             Path haloDataPath = Files.createFile(haloDataFilePath);
 
-            FileWriter fileWriter = new FileWriter(haloDataPath.toFile(), CharsetUtil.UTF_8);
-            fileWriter.write(JsonUtils.objectToJson(data));
-
+            FileUtils.writeStringToFile(haloDataPath.toFile(), JsonUtils.objectToJson(data));
             return buildBackupDto(DATA_EXPORT_BASE_URI, haloDataPath);
         } catch (IOException e) {
             throw new ServiceException("导出数据失败", e);
@@ -420,13 +491,18 @@ public class BackupServiceImpl implements BackupService {
 
     @Override
     public void importData(MultipartFile file) throws IOException {
-        String jsonContent = IoUtil.read(file.getInputStream(), StandardCharsets.UTF_8);
+        String jsonContent = FileUtils.readString(file.getInputStream());
 
         ObjectMapper mapper = JsonUtils.createDefaultJsonMapper();
         TypeReference<HashMap<String, Object>> typeRef =
             new TypeReference<>() {
             };
         HashMap<String, Object> data = mapper.readValue(jsonContent, typeRef);
+
+        String version = (String) Objects.requireNonNullElse(data.get("version"), "");
+        if (!VersionUtil.hasSameMajorAndMinorVersion(HaloConst.HALO_VERSION, version)) {
+            throw new BadRequestException("导入数据的主次版本号与当前系统版本号不匹配，不支持导入！");
+        }
 
         List<Attachment> attachments = Arrays.asList(mapper
             .readValue(mapper.writeValueAsString(data.get("attachments")), Attachment[].class));
@@ -479,6 +555,16 @@ public class BackupServiceImpl implements BackupService {
         List<Post> posts = Arrays
             .asList(mapper.readValue(mapper.writeValueAsString(data.get("posts")), Post[].class));
         postService.createInBatch(posts);
+
+        List<Content> contents = Arrays
+            .asList(
+                mapper.readValue(mapper.writeValueAsString(data.get("contents")), Content[].class));
+        contentService.createInBatch(contents);
+
+        List<ContentPatchLog> contentPatchLogs = Arrays
+            .asList(mapper.readValue(mapper.writeValueAsString(data.get("content_patch_logs")),
+                ContentPatchLog[].class));
+        contentPatchLogService.createInBatch(contentPatchLogs);
 
         List<PostCategory> postCategories = Arrays.asList(mapper
             .readValue(mapper.writeValueAsString(data.get("post_categories")),
@@ -534,7 +620,7 @@ public class BackupServiceImpl implements BackupService {
 
         // Write files to the temporary directory
         String markdownFileTempPathName =
-            haloProperties.getBackupMarkdownDir() + IdUtil.simpleUUID().hashCode();
+            haloProperties.getBackupMarkdownDir() + HaloUtils.simpleUUID().hashCode();
         for (PostMarkdownVO postMarkdownVo : postMarkdownList) {
             StringBuilder content = new StringBuilder();
             Boolean needFrontMatter =
@@ -545,16 +631,15 @@ public class BackupServiceImpl implements BackupService {
             }
             content.append(postMarkdownVo.getOriginalContent());
             try {
+                String filename = postMarkdownVo.getTitle() + "-" + postMarkdownVo.getSlug();
                 String markdownFileName =
-                    postMarkdownVo.getTitle() + "-" + postMarkdownVo.getSlug() + ".md";
+                    FilenameUtils.sanitizeFilename(filename) + ".md";
                 Path markdownFilePath = Paths.get(markdownFileTempPathName, markdownFileName);
                 if (!Files.exists(markdownFilePath.getParent())) {
                     Files.createDirectories(markdownFilePath.getParent());
                 }
                 Path markdownDataPath = Files.createFile(markdownFilePath);
-                FileWriter fileWriter =
-                    new FileWriter(markdownDataPath.toFile(), CharsetUtil.UTF_8);
-                fileWriter.write(content.toString());
+                FileUtils.writeStringToFile(markdownDataPath.toFile(), content.toString());
             } catch (IOException e) {
                 throw new ServiceException("导出数据失败", e);
             }
@@ -563,7 +648,7 @@ public class BackupServiceImpl implements BackupService {
         // Create zip path
         String markdownZipFileName = HALO_BACKUP_MARKDOWN_PREFIX
             + DateTimeUtils.format(LocalDateTime.now(), HORIZONTAL_LINE_DATETIME_FORMATTER)
-            + IdUtil.simpleUUID().hashCode() + ".zip";
+            + HaloUtils.simpleUUID().hashCode() + ".zip";
 
         // Create zip file
         Path markdownZipFilePath =

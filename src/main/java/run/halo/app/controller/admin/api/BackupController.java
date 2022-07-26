@@ -4,12 +4,19 @@ import static run.halo.app.service.BackupService.BackupType.JSON_DATA;
 import static run.halo.app.service.BackupService.BackupType.MARKDOWN;
 import static run.halo.app.service.BackupService.BackupType.WHOLE_SITE;
 
+import com.google.common.collect.Lists;
 import io.swagger.annotations.ApiOperation;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
 import javax.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FilenameUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -26,6 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import run.halo.app.annotation.DisableOnCondition;
 import run.halo.app.config.properties.HaloProperties;
+import run.halo.app.exception.BadRequestException;
 import run.halo.app.exception.NotFoundException;
 import run.halo.app.model.dto.BackupDTO;
 import run.halo.app.model.dto.post.BasePostDetailDTO;
@@ -81,8 +89,19 @@ public class BackupController {
     @PostMapping("work-dir")
     @ApiOperation("Backups work directory")
     @DisableOnCondition
-    public BackupDTO backupHalo() {
-        return backupService.backupWorkDirectory();
+    public BackupDTO backupHalo(@RequestBody List<String> options) {
+        return backupService.backupWorkDirectory(options);
+    }
+
+    @GetMapping("work-dir/options")
+    @ApiOperation("Gets items that can be backed up")
+    public List<String> listBackupItems() throws IOException {
+        return Files.list(Paths.get(haloProperties.getWorkDir()))
+            .map(Path::getFileName)
+            .filter(Objects::nonNull)
+            .map(Path::toString)
+            .sorted()
+            .collect(Collectors.toList());
     }
 
     @GetMapping("work-dir")
@@ -126,10 +145,21 @@ public class BackupController {
         backupService.deleteWorkDirBackup(filename);
     }
 
-    @PostMapping("markdown/import")
+    @PostMapping(value = "markdown/import")
     @ApiOperation("Imports markdown")
     public BasePostDetailDTO backupMarkdowns(@RequestPart("file") MultipartFile file)
         throws IOException {
+        List<String> supportType = Lists.newArrayList("md", "markdown", "mdown");
+        String filename = file.getOriginalFilename();
+        if (StringUtils.isEmpty(filename)) {
+            throw new BadRequestException("文件名不可为空").setErrorData(filename);
+        }
+        String extension = FilenameUtils.getExtension(filename).toLowerCase();
+        if (!supportType.contains(extension)) {
+            throw new BadRequestException(
+                "不支持" + (StringUtils.isNotEmpty(extension) ? extension : "未知") 
+                    + "格式的文件上传").setErrorData(filename);
+        }
         return backupService.importMarkdown(file);
     }
 

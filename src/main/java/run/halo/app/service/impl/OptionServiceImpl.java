@@ -1,8 +1,6 @@
 package run.halo.app.service.impl;
 
-import com.qiniu.common.Zone;
 import com.qiniu.storage.Region;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -10,7 +8,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import javax.persistence.criteria.Predicate;
 import lombok.extern.slf4j.Slf4j;
@@ -28,28 +25,22 @@ import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
 import run.halo.app.cache.AbstractStringCacheStore;
 import run.halo.app.event.options.OptionUpdatedEvent;
-import run.halo.app.exception.MissingPropertyException;
-import run.halo.app.model.dto.OptionDTO;
 import run.halo.app.model.dto.OptionSimpleDTO;
 import run.halo.app.model.entity.Option;
 import run.halo.app.model.enums.PostPermalinkType;
 import run.halo.app.model.enums.SheetPermalinkType;
-import run.halo.app.model.enums.ValueEnum;
 import run.halo.app.model.params.OptionParam;
 import run.halo.app.model.params.OptionQuery;
 import run.halo.app.model.properties.BlogProperties;
 import run.halo.app.model.properties.CommentProperties;
-import run.halo.app.model.properties.OtherProperties;
 import run.halo.app.model.properties.PermalinkProperties;
 import run.halo.app.model.properties.PostProperties;
 import run.halo.app.model.properties.PrimaryProperties;
 import run.halo.app.model.properties.PropertyEnum;
 import run.halo.app.model.properties.QiniuOssProperties;
-import run.halo.app.model.properties.SeoProperties;
 import run.halo.app.repository.OptionRepository;
 import run.halo.app.service.OptionService;
 import run.halo.app.service.base.AbstractCrudService;
-import run.halo.app.utils.DateUtils;
 import run.halo.app.utils.ServiceUtils;
 import run.halo.app.utils.ValidationUtils;
 
@@ -213,10 +204,6 @@ public class OptionServiceImpl extends AbstractCrudService<Option, Integer>
                 .forEach(key -> {
                     PropertyEnum propertyEnum = propertyEnumMap.get(key);
 
-                    if (StringUtils.isBlank(propertyEnum.defaultValue())) {
-                        return;
-                    }
-
                     result.put(key,
                         PropertyEnum.convertTo(propertyEnum.defaultValue(), propertyEnum));
                 });
@@ -226,32 +213,6 @@ public class OptionServiceImpl extends AbstractCrudService<Option, Integer>
 
             return result;
         });
-    }
-
-    @Override
-    public Map<String, Object> listOptions(Collection<String> keys) {
-        if (CollectionUtils.isEmpty(keys)) {
-            return Collections.emptyMap();
-        }
-
-        Map<String, Object> optionMap = listOptions();
-
-        Map<String, Object> result = new HashMap<>(keys.size());
-
-        keys.stream()
-            .filter(optionMap::containsKey)
-            .forEach(key -> result.put(key, optionMap.get(key)));
-
-        return result;
-    }
-
-    @Override
-    public List<OptionDTO> listDtos() {
-        List<OptionDTO> result = new LinkedList<>();
-
-        listOptions().forEach((key, value) -> result.add(new OptionDTO(key, value)));
-
-        return result;
     }
 
     @Override
@@ -295,100 +256,6 @@ public class OptionServiceImpl extends AbstractCrudService<Option, Integer>
 
             return query.where(predicates.toArray(new Predicate[0])).getRestriction();
         };
-    }
-
-    @Override
-    public Object getByKeyOfNullable(String key) {
-        return getByKey(key).orElse(null);
-    }
-
-    @Override
-    public Object getByKeyOfNonNull(String key) {
-        return getByKey(key).orElseThrow(
-            () -> new MissingPropertyException("You have to config " + key + " setting"));
-    }
-
-    @Override
-    public Optional<Object> getByKey(String key) {
-        Assert.hasText(key, "Option key must not be blank");
-
-        return Optional.ofNullable(listOptions().get(key));
-    }
-
-    @Override
-    public <T> Optional<T> getByKey(String key, Class<T> valueType) {
-        return getByKey(key).map(value -> PropertyEnum.convertTo(value.toString(), valueType));
-    }
-
-    @Override
-    public Object getByPropertyOfNullable(PropertyEnum property) {
-        return getByProperty(property).orElse(null);
-    }
-
-    @Override
-    public Object getByPropertyOfNonNull(PropertyEnum property) {
-        Assert.notNull(property, "Blog property must not be null");
-
-        return getByKeyOfNonNull(property.getValue());
-    }
-
-    @Override
-    public Optional<Object> getByProperty(PropertyEnum property) {
-        Assert.notNull(property, "Blog property must not be null");
-
-        return getByKey(property.getValue());
-    }
-
-    @Override
-    public <T> Optional<T> getByProperty(PropertyEnum property, Class<T> propertyType) {
-        return getByProperty(property)
-            .map(propertyValue -> PropertyEnum.convertTo(propertyValue.toString(), propertyType));
-    }
-
-    @Override
-    public <T> T getByPropertyOrDefault(PropertyEnum property, Class<T> propertyType,
-        T defaultValue) {
-        Assert.notNull(property, "Blog property must not be null");
-
-        return getByProperty(property, propertyType).orElse(defaultValue);
-    }
-
-    @Override
-    public <T> T getByPropertyOrDefault(PropertyEnum property, Class<T> propertyType) {
-        return getByProperty(property, propertyType).orElse(property.defaultValue(propertyType));
-    }
-
-    @Override
-    public <T> T getByKeyOrDefault(String key, Class<T> valueType, T defaultValue) {
-        return getByKey(key, valueType).orElse(defaultValue);
-    }
-
-    @Override
-    public <T extends Enum<T>> Optional<T> getEnumByProperty(PropertyEnum property,
-        Class<T> valueType) {
-        return getByProperty(property)
-            .map(value -> PropertyEnum.convertToEnum(value.toString(), valueType));
-    }
-
-    @Override
-    public <T extends Enum<T>> T getEnumByPropertyOrDefault(PropertyEnum property,
-        Class<T> valueType, T defaultValue) {
-        return getEnumByProperty(property, valueType).orElse(defaultValue);
-    }
-
-    @Override
-    public <V, E extends Enum<E> & ValueEnum<V>> Optional<E> getValueEnumByProperty(
-        PropertyEnum property,
-        Class<V> valueType, Class<E> enumType) {
-        return getByProperty(property).map(value -> ValueEnum
-            .valueToEnum(enumType, PropertyEnum.convertTo(value.toString(), valueType)));
-    }
-
-    @Override
-    public <V, E extends Enum<E> & ValueEnum<V>> E getValueEnumByPropertyOrDefault(
-        PropertyEnum property,
-        Class<V> valueType, Class<E> enumType, E defaultValue) {
-        return getValueEnumByProperty(property, valueType, enumType).orElse(defaultValue);
     }
 
     @Override
@@ -436,36 +303,6 @@ public class OptionServiceImpl extends AbstractCrudService<Option, Integer>
                 e);
             return DEFAULT_RSS_PAGE_SIZE;
         }
-    }
-
-    @Override
-    public Zone getQnYunZone() {
-        return getByProperty(QiniuOssProperties.OSS_ZONE).map(qiniuZone -> {
-
-            Zone zone;
-            switch (qiniuZone.toString()) {
-                case "z0":
-                    zone = Zone.zone0();
-                    break;
-                case "z1":
-                    zone = Zone.zone1();
-                    break;
-                case "z2":
-                    zone = Zone.zone2();
-                    break;
-                case "na0":
-                    zone = Zone.zoneNa0();
-                    break;
-                case "as0":
-                    zone = Zone.zoneAs0();
-                    break;
-                default:
-                    // Default is detecting zone automatically
-                    zone = Zone.autoZone();
-            }
-            return zone;
-
-        }).orElseGet(Zone::autoZone);
     }
 
     @Override
@@ -526,27 +363,8 @@ public class OptionServiceImpl extends AbstractCrudService<Option, Integer>
     }
 
     @Override
-    public String getBlogTitle() {
-        return getByProperty(BlogProperties.BLOG_TITLE).orElse("").toString();
-    }
-
-    @Override
-    public String getSeoKeywords() {
-        return getByProperty(SeoProperties.KEYWORDS).orElse("").toString();
-    }
-
-    @Override
-    public String getSeoDescription() {
-        return getByProperty(SeoProperties.DESCRIPTION).orElse("").toString();
-    }
-
-    @Override
     public long getBirthday() {
-        return getByProperty(PrimaryProperties.BIRTHDAY, Long.class).orElseGet(() -> {
-            long currentTime = DateUtils.now().getTime();
-            saveProperty(PrimaryProperties.BIRTHDAY, String.valueOf(currentTime));
-            return currentTime;
-        });
+        return Long.parseLong(getByPropertyOrDefault(PrimaryProperties.BIRTHDAY, String.class));
     }
 
     @Override
@@ -607,12 +425,6 @@ public class OptionServiceImpl extends AbstractCrudService<Option, Integer>
     public String getPathSuffix() {
         return getByPropertyOrDefault(PermalinkProperties.PATH_SUFFIX, String.class,
             PermalinkProperties.PATH_SUFFIX.defaultValue());
-    }
-
-    @Override
-    public Boolean isEnabledAbsolutePath() {
-        return getByPropertyOrDefault(OtherProperties.GLOBAL_ABSOLUTE_PATH_ENABLED, Boolean.class,
-            true);
     }
 
     @Override

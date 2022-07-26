@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.lang.NonNull;
 import run.halo.app.model.entity.PostCategory;
 import run.halo.app.model.enums.PostStatus;
-import run.halo.app.model.projection.CategoryPostCountProjection;
+import run.halo.app.model.projection.CategoryIdPostStatusProjection;
 import run.halo.app.repository.base.BaseRepository;
 
 
@@ -113,11 +113,6 @@ public interface PostCategoryRepository extends BaseRepository<PostCategory, Int
     @NonNull
     List<PostCategory> deleteByCategoryId(@NonNull Integer categoryId);
 
-    @Query("select new run.halo.app.model.projection.CategoryPostCountProjection(count(pc.postId)"
-        + ", pc.categoryId) from PostCategory pc group by pc.categoryId")
-    @NonNull
-    List<CategoryPostCountProjection> findPostCount();
-
     /**
      * Finds all post categories by category id list.
      *
@@ -127,4 +122,14 @@ public interface PostCategoryRepository extends BaseRepository<PostCategory, Int
     @Query("select pc from PostCategory pc where pc.categoryId in (?1)")
     @NonNull
     List<PostCategory> findAllByCategoryIdList(List<Integer> categoryIdList);
+
+    /**
+     * Finds all category ids with post id and status.
+     *
+     * @return a list of category id and post status
+     */
+    @NonNull
+    @Query("select new run.halo.app.model.projection.CategoryIdPostStatusProjection(pc.categoryId,"
+        + " pc.postId, p.status) from PostCategory pc inner join Post p on p.id=pc.postId")
+    List<CategoryIdPostStatusProjection> findAllWithPostStatus();
 }
